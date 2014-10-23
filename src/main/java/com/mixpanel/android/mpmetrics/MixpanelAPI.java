@@ -1,6 +1,5 @@
 package com.mixpanel.android.mpmetrics;
 
-import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.Application;
@@ -173,6 +172,7 @@ public class MixpanelAPI {
         }
         synchronized (sInstanceMap) {
             final Context appContext = context.getApplicationContext();
+            Log.d(MixpanelAPI.class.getName(), "You are running a modified version of MixPanel without ip tracking");
 
             if (null == sReferrerPrefs) {
                 sReferrerPrefs = sPrefsLoader.loadPreferences(context, MPConfig.REFERRER_PREFS_NAME, null);
