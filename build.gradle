@@ -13,7 +13,7 @@ buildscript {
 
 android {
     compileSdkVersion 19
-    buildToolsVersion "19.1.0"
+    buildToolsVersion "20.0.0"
 
     defaultConfig {
         // If you change minSdkVersion or targetSdkVersion below, you must also change
@@ -49,11 +49,11 @@ def isReleaseVersion() {
     return !version.endsWith("SNAPSHOT");
 }
 
-configurations {
-    archives {
-        extendsFrom configurations.default
-    }
-}
+//configurations {
+//    archives {
+//        extendsFrom configurations.default
+//    }
+//}
 
 if (isReleaseVersion()) {
     signing {
@@ -62,67 +62,85 @@ if (isReleaseVersion()) {
     }
 }
 
+artifacts {
+    archives file('build/outputs/aar/mixpanel-android-4.4.0.aar')
+}
 
+apply plugin: 'maven'
 uploadArchives {
-    configuration = configurations.archives
-
-    repositories.mavenDeployer {
-        pom.project {
-            name project.name
-            packaging 'aar'
-            description 'An Android library for Mixpanel Analytics \n' +
-                    'http://mixpanel.com/android-analytics/'
-            url 'https://github.com/mixpanel/mixpanel-android'
-            scm {
-                url 'http://github.com/mixpanel/mixpanel-android'
-                connection 'scm:git:http://github.com/mixpanel/mixpanel-android'
-                developerConnection 'scm:git:git@github.com:mixpanel/mixpanel-android.git'
-            }
-            licenses {
-                license {
-                    name 'The Apache Software License, Version 2.0'
-                    url 'http://www.apache.org/license/LICENSE-2.0.txt'
-                    distribution 'repo'
-                }
-            }
-            developers {
-                developer {
-                    id 'jbwyme'
-                    name 'Josh Wymer'
-                    email 'josh@mixpanel.com'
-                }
-                developer {
-                    id 'joeatwork'
-                    name 'Joe Bowers'
-                    email 'joe@mixpanel.com'
-                }
-            }
+    repositories {
+        mavenDeployer {
+            repository(url: uri("../mixpanel-maven/release"))
+            pom.groupId = 'com.mixpanel.android'
+            pom.artifactId = 'mixpanel-android'
+            pom.version = '4.4.0'
         }
-
-        if (isReleaseVersion()) {
-            /**
-             * In order to do nexus deploys, you'll need to setup a gradle.properties file in $HOME/.gradle
-             * with the following properties. You'll need the mixpanel.key file and then import it using GnuPG
-             * which will provide you with the keyId and the secring.gpg file
-             * signing.keyId=
-             * signing.password=
-             * signing.secretKeyRingFile=
-             *
-             * sonatypeRepo=https://oss.sonatype.org/service/local/staging/deploy/maven2/
-             * sonatypeUsername=
-             * sonatypePassword=
-             */
-
-            beforeDeployment {
-                MavenDeployment deployment -> signing.signPom(deployment)
-            }
-            repository(url: "https://oss.sonatype.org/service/local/staging/deploy/maven2/") {
-//                authentication(userName: sonatypeUsername, password: sonatypePassword)
-            }
-        } else {
-            repository(url:'file://' + new File(System.getProperty('user.home'), '.m2/repository').absolutePath)
-        }
-
     }
 }
+
+
+//uploadArchives {
+//    configuration = configurations.archives
+//
+//    repositories.mavenDeployer {
+//        pom.project {
+//            name project.name
+//            packaging 'aar'
+//            description 'An Android library for Mixpanel Analytics \n' +
+//                    'http://mixpanel.com/android-analytics/'
+//            url 'https://github.com/omadahealth/mixpanel-android'
+//            scm {
+//                url 'http://github.com/omadahealth/mixpanel-android'
+//                connection 'scm:git:http://github.com/omadahealth/mixpanel-android'
+//                developerConnection 'scm:git:git@github.com:omadahealth/mixpanel-android.git'
+//            }
+//            licenses {
+//                license {
+//                    name 'The Apache Software License, Version 2.0'
+//                    url 'http://www.apache.org/license/LICENSE-2.0.txt'
+//                    distribution 'repo'
+//                }
+//            }
+//            developers {
+//                developer {
+//                    id 'jbwyme'
+//                    name 'Josh Wymer'
+//                    email 'josh@mixpanel.com'
+//                }
+//                developer {
+//                    id 'joeatwork'
+//                    name 'Joe Bowers'
+//                    email 'joe@mixpanel.com'
+//                }
+//            }
+//        }
+//
+//        if (isReleaseVersion()) {
+//            /**
+//             * In order to do nexus deploys, you'll need to setup a gradle.properties file in $HOME/.gradle
+//             * with the following properties. You'll need the mixpanel.key file and then import it using GnuPG
+//             * which will provide you with the keyId and the secring.gpg file
+//             * signing.keyId=
+//             * signing.password=
+//             * signing.secretKeyRingFile=
+//             *
+//             * sonatypeRepo=https://oss.sonatype.org/service/local/staging/deploy/maven2/
+//             * sonatypeUsername=
+//             * sonatypePassword=
+//             */
+//
+//            sonatypeUsername=todo
+//            sonatypePassword=todo
+//            beforeDeployment {
+//                MavenDeployment deployment -> signing.signPom(deployment)
+//            }
+//            repository(url: "https://oss.sonatype.org/service/local/staging/deploy/maven2/") {
+//                authentication(userName: sonatypeUsername, password: sonatypePassword)
+//            }
+//        } else {
+//            repository(url:'file://' + new File(System.getProperty('user.home'), '.m2/repository').absolutePath)
+//        }
+//
+//    }
+//}
 
