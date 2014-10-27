@@ -63,7 +63,7 @@ if (isReleaseVersion()) {
 }
 
 artifacts {
-    archives file('build/outputs/aar/mixpanel-android-4.4.0.aar')
+    archives file('build/outputs/aar/mixpanel-android-5.0.0.0.aar')
 }
 
 apply plugin: 'maven'
@@ -73,7 +73,7 @@ uploadArchives {
             repository(url: uri("../mixpanel-maven/release"))
             pom.groupId = 'com.mixpanel.android'
             pom.artifactId = 'mixpanel-android'
-            pom.version = '4.4.0'
+            pom.version = '5.0.0.0'
         }
     }
 }

@@ -11,7 +11,7 @@ import android.util.Log;
  * Stores global configuration options for the Mixpanel library.
  */
 public class MPConfig {
-    public static final String VERSION = "4.4.0";
+    public static final String VERSION = "5.0.0.0";
 
     public static boolean DEBUG = false;
 
@@ -56,25 +56,25 @@ public class MPConfig {
 
         String eventsEndpoint = metaData.getString("com.mixpanel.android.MPConfig.EventsEndpoint");
         if (null == eventsEndpoint) {
-            eventsEndpoint = "https://api.mixpanel.com/track?ip=0";
+            eventsEndpoint = "https://api.mixpanel.com/track?ip=1";
         }
         mEventsEndpoint = eventsEndpoint;
 
         String eventsFallbackEndpoint = metaData.getString("com.mixpanel.android.MPConfig.EventsFallbackEndpoint");
         if (null == eventsFallbackEndpoint) {
-            eventsFallbackEndpoint = "http://api.mixpanel.com/track?ip=0";
+            eventsFallbackEndpoint = "http://api.mixpanel.com/track?ip=1";
         }
         mEventsFallbackEndpoint = eventsFallbackEndpoint;
 
         String peopleEndpoint = metaData.getString("com.mixpanel.android.MPConfig.PeopleEndpoint");
         if (null == peopleEndpoint) {
-            peopleEndpoint = "https://api.mixpanel.com/engage";
+            peopleEndpoint = "https://api.mixpanel.com/engage?$ip=0";
         }
         mPeopleEndpoint = peopleEndpoint;
 
         String peopleFallbackEndpoint = metaData.getString("com.mixpanel.android.MPConfig.PeopleFallbackEndpoint");
         if (null == peopleFallbackEndpoint) {
-            peopleFallbackEndpoint = "http://api.mixpanel.com/engage";
+            peopleFallbackEndpoint = "http://api.mixpanel.com/engage?$ip=0";
         }
         mPeopleFallbackEndpoint = peopleFallbackEndpoint;
 
