@@ -68,13 +68,13 @@ public class MPConfig {
 
         String peopleEndpoint = metaData.getString("com.mixpanel.android.MPConfig.PeopleEndpoint");
         if (null == peopleEndpoint) {
-            peopleEndpoint = "https://api.mixpanel.com/engage?$ip=0";
+            peopleEndpoint = "https://api.mixpanel.com/engage?ip=0";
         }
         mPeopleEndpoint = peopleEndpoint;
 
         String peopleFallbackEndpoint = metaData.getString("com.mixpanel.android.MPConfig.PeopleFallbackEndpoint");
         if (null == peopleFallbackEndpoint) {
-            peopleFallbackEndpoint = "http://api.mixpanel.com/engage?$ip=0";
+            peopleFallbackEndpoint = "http://api.mixpanel.com/engage?ip=0";
         }
         mPeopleFallbackEndpoint = peopleFallbackEndpoint;
 
