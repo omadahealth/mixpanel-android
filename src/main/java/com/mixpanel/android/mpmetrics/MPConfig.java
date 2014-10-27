@@ -56,13 +56,13 @@ public class MPConfig {
 
         String eventsEndpoint = metaData.getString("com.mixpanel.android.MPConfig.EventsEndpoint");
         if (null == eventsEndpoint) {
-            eventsEndpoint = "https://api.mixpanel.com/track?ip=1";
+            eventsEndpoint = "https://api.mixpanel.com/track?ip=0";
         }
         mEventsEndpoint = eventsEndpoint;
 
         String eventsFallbackEndpoint = metaData.getString("com.mixpanel.android.MPConfig.EventsFallbackEndpoint");
         if (null == eventsFallbackEndpoint) {
-            eventsFallbackEndpoint = "http://api.mixpanel.com/track?ip=1";
+            eventsFallbackEndpoint = "http://api.mixpanel.com/track?ip=0";
         }
         mEventsFallbackEndpoint = eventsFallbackEndpoint;
 
