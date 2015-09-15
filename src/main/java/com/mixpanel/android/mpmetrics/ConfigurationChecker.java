@@ -42,11 +42,25 @@ import android.util.Log;
 
     public static String LOGTAG = "MixpanelAPI.ConfigurationChecker";
 
+    public static boolean checkBasicConfiguration(Context context) {
+        final PackageManager packageManager = context.getPackageManager();
+        final String packageName = context.getPackageName();
+
+        if (PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("android.permission.INTERNET", packageName)) {
+            Log.w(LOGTAG, "Package does not have permission android.permission.INTERNET - Mixpanel will not work at all!");
+            Log.i(LOGTAG, "You can fix this by adding the following to your AndroidManifest.xml file:\n" +
+                    "<uses-permission android:name=\"android.permission.INTERNET\" />");
+            return false;
+        }
+
+        return true;
+    }
+
     public static boolean checkPushConfiguration(Context context) {
 
         if (Build.VERSION.SDK_INT < 8) {
             // Not a warning, may be expected behavior
-            Log.i(LOGTAG, "Push not supported in SDK " + Build.VERSION.SDK_INT);
+            Log.i(LOGTAG, "Mixpanel push notifications not supported in SDK " + Build.VERSION.SDK_INT);
             return false;
         }
 
@@ -65,42 +79,49 @@ import android.util.Log;
         }
         // check regular permissions
 
-        if(PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("com.google.android.c2dm.permission.RECEIVE", packageName)) {
+        if (PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("com.google.android.c2dm.permission.RECEIVE", packageName)) {
             Log.w(LOGTAG, "Package does not have permission com.google.android.c2dm.permission.RECEIVE");
             Log.i(LOGTAG, "You can fix this by adding the following to your AndroidManifest.xml file:\n" +
                     "<uses-permission android:name=\"com.google.android.c2dm.permission.RECEIVE\" />");
             return false;
         }
 
-        if(PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("android.permission.INTERNET", packageName)) {
+        if (PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("android.permission.INTERNET", packageName)) {
             Log.w(LOGTAG, "Package does not have permission android.permission.INTERNET");
             Log.i(LOGTAG, "You can fix this by adding the following to your AndroidManifest.xml file:\n" +
                     "<uses-permission android:name=\"android.permission.INTERNET\" />");
             return false;
         }
 
-        if(PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("android.permission.GET_ACCOUNTS", packageName)) {
-            Log.w(LOGTAG, "Package does not have permission android.permission.GET_ACCOUNTS");
-            Log.i(LOGTAG, "You can fix this by adding the following to your AndroidManifest.xml file:\n" +
-                    "<uses-permission android:name=\"android.permission.GET_ACCOUNTS\" />");
-            return false;
-        }
-
-        if(PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("android.permission.WAKE_LOCK", packageName)) {
+        if (PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("android.permission.WAKE_LOCK", packageName)) {
             Log.w(LOGTAG, "Package does not have permission android.permission.WAKE_LOCK");
             Log.i(LOGTAG, "You can fix this by adding the following to your AndroidManifest.xml file:\n" +
                     "<uses-permission android:name=\"android.permission.WAKE_LOCK\" />");
             return false;
         }
 
+        // This permission is only required on older devices
+        if (PackageManager.PERMISSION_GRANTED != packageManager.checkPermission("android.permission.GET_ACCOUNTS", packageName)) {
+            Log.i(LOGTAG, "Package does not have permission android.permission.GET_ACCOUNTS");
+            Log.i(LOGTAG, "Android versions below 4.1 require GET_ACCOUNTS to receive Mixpanel push notifications.\n" +
+                    "Devices with later OS versions will still be able to receive messages, but if you'd like to support " +
+                    "older devices, you'll need to add the following to your AndroidManifest.xml file:\n" +
+                    "<uses-permission android:name=\"android.permission.GET_ACCOUNTS\" />");
+
+            if (Build.VERSION.SDK_INT < 16) {
+                return false;
+            }
+        }
+
         // check receivers
-        PackageInfo receiversInfo;
+        final PackageInfo receiversInfo;
         try {
             receiversInfo = packageManager.getPackageInfo(packageName, PackageManager.GET_RECEIVERS);
         } catch (final NameNotFoundException e) {
             Log.w(LOGTAG, "Could not get receivers for package " + packageName);
             return false;
         }
+
         final ActivityInfo[] receivers = receiversInfo.receivers;
         if (receivers == null || receivers.length == 0) {
             Log.w(LOGTAG, "No receiver for package " + packageName);
@@ -123,12 +144,30 @@ import android.util.Log;
             return false;
         }
 
-        return checkReceiver(context, allowedReceivers, "com.google.android.c2dm.intent.REGISTRATION") &&
-                checkReceiver(context, allowedReceivers, "com.google.android.c2dm.intent.RECEIVE");
+        if (!checkReceiver(context, allowedReceivers, "com.google.android.c2dm.intent.RECEIVE")) {
+            return false;
+        }
+
+        boolean canRegisterWithPlayServices = false;
+        try {
+            Class.forName("com.google.android.gms.common.GooglePlayServicesUtil");
+            canRegisterWithPlayServices = true;
+        } catch(final ClassNotFoundException e) {
+            Log.w(LOGTAG, "Google Play Services aren't included in your build- push notifications won't work on Lollipop/API 21 or greater");
+            Log.i(LOGTAG, "You can fix this by adding com.google.android.gms:play-services as a dependency of your gradle or maven project");
+        }
+
+        boolean canRegisterWithRegistrationIntent = true;
+        if (!checkReceiver(context, allowedReceivers, "com.google.android.c2dm.intent.REGISTRATION")) {
+            Log.i(LOGTAG, "(You can still receive push notifications on Lollipop/API 21 or greater with this configuration)");
+            canRegisterWithRegistrationIntent = false;
+        }
+
+        return canRegisterWithPlayServices || canRegisterWithRegistrationIntent;
     }
 
     public static boolean checkSurveyActivityAvailable(Context context) {
-        if (Build.VERSION.SDK_INT < 14) {
+        if (Build.VERSION.SDK_INT < MPConfig.UI_FEATURES_MIN_API) {
             // No need to log, SurveyActivity doesn't work on this platform.
             return false;
         }

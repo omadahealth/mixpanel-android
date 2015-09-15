@@ -43,6 +43,9 @@ import com.mixpanel.android.util.StackBlurManager;
         protected Void doInBackground(Void ...params) {
             if (null != mSourceImage) {
                 try {
+                    /* TODO there is a better and more efficient way to do this, consider
+                     * https://github.com/500px/500px-android-blur
+                     */
                     StackBlurManager.process(mSourceImage, 20);
                     final Canvas canvas = new Canvas(mSourceImage);
                     canvas.drawColor(GRAY_72PERCENT_OPAQUE, PorterDuff.Mode.SRC_ATOP);
@@ -61,7 +64,7 @@ import com.mixpanel.android.util.StackBlurManager;
         }
 
         @Override
-        protected void onPostExecute(Void _) {
+        protected void onPostExecute(Void _ignored) {
             mListener.onBackgroundCaptured(mSourceImage, mCalculatedHighlightColor);
         }
 
@@ -75,5 +78,5 @@ import com.mixpanel.android.util.StackBlurManager;
     private static final int GRAY_72PERCENT_OPAQUE = Color.argb(186, 28, 28, 28);
 
     @SuppressWarnings("unused")
-    private static final String LOGTAG = "MixpanelAPI BackgroundCapture";
+    private static final String LOGTAG = "MixpanelAPI.BackgroundCapture";
 }

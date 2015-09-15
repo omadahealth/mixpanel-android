@@ -10,11 +10,17 @@ import android.util.Log;
 import android.view.Display;
 import android.view.WindowManager;
 
+import com.mixpanel.android.util.ImageStore;
+import com.mixpanel.android.util.RemoteService;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.net.MalformedURLException;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -22,43 +28,67 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 
+import javax.net.ssl.SSLSocketFactory;
+
 /* package */ class DecideChecker {
 
     /* package */ static class Result {
         public Result() {
             surveys = new ArrayList<Survey>();
             notifications = new ArrayList<InAppNotification>();
+            eventBindings = EMPTY_JSON_ARRAY;
+            variants = EMPTY_JSON_ARRAY;
         }
+
         public final List<Survey> surveys;
         public final List<InAppNotification> notifications;
+        public JSONArray eventBindings;
+        public JSONArray variants;
     }
 
     public DecideChecker(final Context context, final MPConfig config) {
         mContext = context;
         mConfig = config;
-        mChecks = new LinkedList<DecideUpdates>();
+        mChecks = new LinkedList<DecideMessages>();
+        mImageStore = createImageStore(context);
     }
 
-    public void addDecideCheck(final DecideUpdates check) {
+    protected ImageStore createImageStore(final Context context) {
+        return new ImageStore(context, "DecideChecker");
+    }
+
+    public void addDecideCheck(final DecideMessages check) {
         mChecks.add(check);
     }
 
-    public void runDecideChecks(final ServerMessage poster) {
-        final Iterator<DecideUpdates> itr = mChecks.iterator();
+    public void runDecideChecks(final RemoteService poster) throws RemoteService.ServiceUnavailableException {
+        final Iterator<DecideMessages> itr = mChecks.iterator();
         while (itr.hasNext()) {
-            final DecideUpdates updates = itr.next();
-            if (updates.isDestroyed()) {
-                itr.remove();
-            } else {
-                final Result result = runDecideCheck(updates.getToken(), updates.getDistinctId(), poster);
-                updates.reportResults(result.surveys, result.notifications);
+            final DecideMessages updates = itr.next();
+            final String distinctId = updates.getDistinctId();
+            try {
+                final Result result = runDecideCheck(updates.getToken(), distinctId, poster);
+                updates.reportResults(result.surveys, result.notifications, result.eventBindings, result.variants);
+            } catch (final UnintelligibleMessageException e) {
+                Log.e(LOGTAG, e.getMessage(), e);
             }
         }
     }
 
-    private Result runDecideCheck(final String token, final String distinctId, final ServerMessage poster) {
+    /* package */ static class UnintelligibleMessageException extends Exception {
+        private static final long serialVersionUID = -6501269367559104957L;
+
+        public UnintelligibleMessageException(String message, JSONException cause) {
+            super(message, cause);
+        }
+    }
+
+    private Result runDecideCheck(final String token, final String distinctId, final RemoteService poster)
+        throws RemoteService.ServiceUnavailableException, UnintelligibleMessageException {
         final String responseString = getDecideResponseFromServer(token, distinctId, poster);
-        if (MPConfig.DEBUG) Log.d(LOGTAG, "Mixpanel decide server response was:\n" + responseString);
+        if (MPConfig.DEBUG) {
+            Log.v(LOGTAG, "Mixpanel decide server response was:\n" + responseString);
+        }
 
         Result parsed = new Result();
         if (null != responseString) {
@@ -71,7 +101,7 @@ import java.util.List;
             final Bitmap image = getNotificationImage(notification, mContext, poster);
             if (null == image) {
                 Log.i(LOGTAG, "Could not retrieve image for notification " + notification.getId() +
-                              ", will not show the notification.");
+                        ", will not show the notification.");
                 notificationIterator.remove();
             } else {
                 notification.setImage(image);
@@ -81,15 +111,16 @@ import java.util.List;
         return parsed;
     }// runDecideCheck
 
-    /* package */ static Result parseDecideResponse(String responseString) {
+    /* package */ static Result parseDecideResponse(String responseString)
+            throws UnintelligibleMessageException {
         JSONObject response;
         final Result ret = new Result();
 
         try {
             response = new JSONObject(responseString);
         } catch (final JSONException e) {
-            Log.e(LOGTAG, "Mixpanel endpoint returned unparsable result:\n" + responseString, e);
-            return ret;
+            final String message = "Mixpanel endpoint returned unparsable result:\n" + responseString;
+            throw new UnintelligibleMessageException(message, e);
         }
 
         JSONArray surveys = null;
@@ -126,7 +157,7 @@ import java.util.List;
 
         if (null != notifications) {
             final int notificationsToRead = Math.min(notifications.length(), MPConfig.MAX_NOTIFICATION_CACHE_COUNT);
-            for (int i = 0; null != notifications && i < notificationsToRead; i++) {
+            for (int i = 0; i < notificationsToRead; i++) {
                 try {
                     final JSONObject notificationJson = notifications.getJSONObject(i);
                     final InAppNotification notification = new InAppNotification(notificationJson);
@@ -141,62 +172,96 @@ import java.util.List;
             }
         }
 
+        if (response.has("event_bindings")) {
+            try {
+                ret.eventBindings = response.getJSONArray("event_bindings");
+            } catch (final JSONException e) {
+                Log.e(LOGTAG, "Mixpanel endpoint returned non-array JSON for event bindings: " + response);
+            }
+        }
+
+        if (response.has("variants")) {
+            try {
+                ret.variants = response.getJSONArray("variants");
+            } catch (final JSONException e) {
+                Log.e(LOGTAG, "Mixpanel endpoint returned non-array JSON for variants: " + response);
+            }
+        }
+
         return ret;
     }
 
-    private String getDecideResponseFromServer(String unescapedToken, String unescapedDistinctId, ServerMessage poster) {
-        String escapedToken;
-        String escapedId;
+    private String getDecideResponseFromServer(String unescapedToken, String unescapedDistinctId, RemoteService poster)
+            throws RemoteService.ServiceUnavailableException {
+        final String escapedToken;
+        final String escapedId;
         try {
             escapedToken = URLEncoder.encode(unescapedToken, "utf-8");
-            escapedId = URLEncoder.encode(unescapedDistinctId, "utf-8");
-        } catch(final UnsupportedEncodingException e) {
+            if (null != unescapedDistinctId) {
+                escapedId = URLEncoder.encode(unescapedDistinctId, "utf-8");
+            } else {
+                escapedId = null;
+            }
+        } catch (final UnsupportedEncodingException e) {
             throw new RuntimeException("Mixpanel library requires utf-8 string encoding to be available", e);
         }
-        final String checkQuery = new StringBuilder()
-                .append("?version=1&lib=android&token=")
-                .append(escapedToken)
-                .append("&distinct_id=")
-                .append(escapedId)
-                .toString();
-        final String[] urls = { mConfig.getDecideEndpoint() + checkQuery, mConfig.getDecideFallbackEndpoint() + checkQuery };
 
-        if (MPConfig.DEBUG) {
-            Log.d(LOGTAG, "Querying decide server at " + urls[0]);
-            Log.d(LOGTAG, "    (with fallback " + urls[1] + ")");
+        final StringBuilder queryBuilder = new StringBuilder()
+                .append("?version=1&lib=android&token=")
+                .append(escapedToken);
+
+        if (null != escapedId) {
+            queryBuilder.append("&distinct_id=").append(escapedId);
         }
 
-        byte[] response = poster.getUrls(mContext, urls);
+        final String checkQuery = queryBuilder.toString();
+        final String[] urls;
+        if (mConfig.getDisableFallback()) {
+            urls = new String[]{mConfig.getDecideEndpoint() + checkQuery};
+        } else {
+            urls = new String[]{mConfig.getDecideEndpoint() + checkQuery,
+                    mConfig.getDecideFallbackEndpoint() + checkQuery};
+        }
+
+        if (MPConfig.DEBUG) {
+            Log.v(LOGTAG, "Querying decide server, urls:");
+            for (int i = 0; i < urls.length; i++) {
+                Log.v(LOGTAG, "    >> " + urls[i]);
+            }
+        }
+
+        final byte[] response = getUrls(poster, mContext, urls);
         if (null == response) {
             return null;
         }
         try {
             return new String(response, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
+        } catch (final UnsupportedEncodingException e) {
             throw new RuntimeException("UTF not supported on this platform?", e);
         }
     }
 
-    private static Bitmap getNotificationImage(InAppNotification notification, Context context, ServerMessage poster) {
-        Bitmap ret = null;
-        String[] urls = { notification.getImage2xUrl() };
+    private Bitmap getNotificationImage(InAppNotification notification, Context context, RemoteService poster)
+        throws RemoteService.ServiceUnavailableException {
+        String[] urls = {notification.getImage2xUrl(), notification.getImageUrl()};
 
-        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        Display display = wm.getDefaultDisplay();
-        int displayWidth = getDisplayWidth(display);
+        final WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        final Display display = wm.getDefaultDisplay();
+        final int displayWidth = getDisplayWidth(display);
 
         if (notification.getType() == InAppNotification.Type.TAKEOVER && displayWidth >= 720) {
-            urls = new String[]{ notification.getImage4xUrl(), notification.getImage2xUrl() };
+            urls = new String[]{notification.getImage4xUrl(), notification.getImage2xUrl(), notification.getImageUrl()};
         }
 
-        byte[] response = poster.getUrls(context, urls);
-        if (null != response) {
-            ret = BitmapFactory.decodeByteArray(response, 0, response.length);
-        } else {
-            Log.i(LOGTAG, "Failed to download images from " + Arrays.toString(urls));
+        for (String url : urls) {
+            try {
+                return mImageStore.getImage(url);
+            } catch (ImageStore.CantGetImageException e) {
+                Log.v(LOGTAG, "Can't load image " + url + " for a notification", e);
+            }
         }
 
-        return ret;
+        return null;
     }
 
     @SuppressWarnings("deprecation")
@@ -211,9 +276,44 @@ import java.util.List;
         }
     }
 
+    private static byte[] getUrls(RemoteService poster, Context context, String[] urls)
+        throws RemoteService.ServiceUnavailableException {
+        if (! poster.isOnline(context)) {
+            return null;
+        }
+
+        byte[] response = null;
+        for (String url : urls) {
+            try {
+                final MPConfig config = MPConfig.getInstance(context);
+                final SSLSocketFactory socketFactory = config.getSSLSocketFactory();
+                response = poster.performRequest(url, null, socketFactory);
+                break;
+            } catch (final MalformedURLException e) {
+                Log.e(LOGTAG, "Cannot interpret " + url + " as a URL.", e);
+            } catch (final FileNotFoundException e) {
+                if (MPConfig.DEBUG) {
+                    Log.v(LOGTAG, "Cannot get " + url + ", file not found.", e);
+                }
+            } catch (final IOException e) {
+                if (MPConfig.DEBUG) {
+                    Log.v(LOGTAG, "Cannot get " + url + ".", e);
+                }
+            } catch (final OutOfMemoryError e) {
+                Log.e(LOGTAG, "Out of memory when getting to " + url + ".", e);
+                break;
+            }
+        }
+
+        return response;
+    }
+
     private final MPConfig mConfig;
     private final Context mContext;
-    private final List<DecideUpdates> mChecks;
+    private final List<DecideMessages> mChecks;
+    private final ImageStore mImageStore;
 
-    private static final String LOGTAG = "MixpanelAPI DecideChecker";
+    private static final JSONArray EMPTY_JSON_ARRAY = new JSONArray();
+
+    private static final String LOGTAG = "MixpanelAPI.DChecker";
 }

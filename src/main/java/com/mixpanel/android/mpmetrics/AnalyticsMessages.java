@@ -6,10 +6,16 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Message;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.Log;
 
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GooglePlayServicesUtil;
+import com.google.android.gms.gcm.GoogleCloudMessaging;
 import com.mixpanel.android.util.Base64Coder;
+import com.mixpanel.android.util.RemoteService;
+import com.mixpanel.android.util.HttpService;
 
 import org.apache.http.NameValuePair;
 import org.apache.http.message.BasicNameValuePair;
@@ -25,6 +31,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Manage communication of events with the internal database and the Mixpanel servers.
@@ -40,7 +47,11 @@ import java.util.Map;
     /* package */ AnalyticsMessages(final Context context) {
         mContext = context;
         mConfig = getConfig(context);
-        mWorker = new Worker();
+        mWorker = createWorker();
+    }
+
+    protected Worker createWorker() {
+        return new Worker();
     }
 
     /**
@@ -88,32 +99,18 @@ import java.util.Map;
         mWorker.runMessage(m);
     }
 
-    /**
-     * Remove this when we eliminate the associated deprecated public ifc
-     */
-    public void setFlushInterval(final long milliseconds) {
-        final Message m = Message.obtain();
-        m.what = SET_FLUSH_INTERVAL;
-        m.obj = milliseconds;
-
-        mWorker.runMessage(m);
-    }
-
-    /**
-     * Remove this when we eliminate the associated deprecated public ifc
-     */
-    public void setDisableFallback(boolean disableIfTrue) {
-        final Message m = Message.obtain();
-        m.what = SET_DISABLE_FALLBACK;
-        m.obj = disableIfTrue;
-
-        mWorker.runMessage(m);
-    }
-
-    public void installDecideCheck(final DecideUpdates check) {
+    public void installDecideCheck(final DecideMessages check) {
         final Message m = Message.obtain();
         m.what = INSTALL_DECIDE_CHECK;
         m.obj = check;
+
+        mWorker.runMessage(m);
+    }
+
+    public void registerForGCM(final String senderID) {
+        final Message m = Message.obtain();
+        m.what = REGISTER_FOR_GCM;
+        m.obj = senderID;
 
         mWorker.runMessage(m);
     }
@@ -140,8 +137,8 @@ import java.util.Map;
         return MPConfig.getInstance(context);
     }
 
-    protected ServerMessage getPoster() {
-        return new ServerMessage();
+    protected RemoteService getPoster() {
+        return new HttpService();
     }
 
     ////////////////////////////////////////////////////
@@ -174,14 +171,20 @@ import java.util.Map;
     // Will be called from the Mixpanel thread.
     private void logAboutMessageToMixpanel(String message) {
         if (MPConfig.DEBUG) {
-            Log.d(LOGTAG, message + " (Thread " + Thread.currentThread().getId() + ")");
+            Log.v(LOGTAG, message + " (Thread " + Thread.currentThread().getId() + ")");
+        }
+    }
+
+    private void logAboutMessageToMixpanel(String message, Throwable e) {
+        if (MPConfig.DEBUG) {
+            Log.v(LOGTAG, message + " (Thread " + Thread.currentThread().getId() + ")", e);
         }
     }
 
     // Worker will manage the (at most single) IO thread associated with
     // this AnalyticsMessages instance.
     // XXX: Worker class is unnecessary, should be just a subclass of HandlerThread
-    private class Worker {
+    class Worker {
         public Worker() {
             mHandler = restartWorkerThread();
         }
@@ -205,21 +208,26 @@ import java.util.Map;
 
         // NOTE that the returned worker will run FOREVER, unless you send a hard kill
         // (which you really shouldn't)
-        private Handler restartWorkerThread() {
+        protected Handler restartWorkerThread() {
             final HandlerThread thread = new HandlerThread("com.mixpanel.android.AnalyticsWorker", Thread.MIN_PRIORITY);
             thread.start();
             final Handler ret = new AnalyticsMessageHandler(thread.getLooper());
             return ret;
         }
 
-        private class AnalyticsMessageHandler extends Handler {
+        class AnalyticsMessageHandler extends Handler {
             public AnalyticsMessageHandler(Looper looper) {
                 super(looper);
                 mDbAdapter = null;
-                mDecideChecker = new DecideChecker(mContext, mConfig);
+                mDecideChecker = createDecideChecker();
                 mDisableFallback = mConfig.getDisableFallback();
-                mFlushInterval = mConfig.getFlushInterval();
+                mFlushInterval = mConfig.getFlushInterval(mContext);
                 mSystemInformation = new SystemInformation(mContext);
+                mRetryAfter = -1;
+            }
+
+            protected DecideChecker createDecideChecker() {
+                return new DecideChecker(mContext, mConfig);
             }
 
             @Override
@@ -231,26 +239,15 @@ import java.util.Map;
                 }
 
                 try {
-                    int queueDepth = -1;
+                    int returnCode = MPDbAdapter.DB_UNDEFINED_CODE;
 
-                    if (msg.what == SET_FLUSH_INTERVAL) {
-                        final Long newIntervalObj = (Long) msg.obj;
-                        logAboutMessageToMixpanel("Changing flush interval to " + newIntervalObj);
-                        mFlushInterval = newIntervalObj.longValue();
-                        removeMessages(FLUSH_QUEUE);
-                    }
-                    else if (msg.what == SET_DISABLE_FALLBACK) {
-                        final Boolean disableState = (Boolean) msg.obj;
-                        logAboutMessageToMixpanel("Setting fallback to " + disableState);
-                        mDisableFallback = disableState.booleanValue();
-                    }
-                    else if (msg.what == ENQUEUE_PEOPLE) {
+                    if (msg.what == ENQUEUE_PEOPLE) {
                         final JSONObject message = (JSONObject) msg.obj;
 
                         logAboutMessageToMixpanel("Queuing people record for sending later");
                         logAboutMessageToMixpanel("    " + message.toString());
 
-                        queueDepth = mDbAdapter.addJSON(message, MPDbAdapter.Table.PEOPLE);
+                        returnCode = mDbAdapter.addJSON(message, MPDbAdapter.Table.PEOPLE);
                     }
                     else if (msg.what == ENQUEUE_EVENTS) {
                         final EventDescription eventDescription = (EventDescription) msg.obj;
@@ -258,7 +255,7 @@ import java.util.Map;
                             final JSONObject message = prepareEventObject(eventDescription);
                             logAboutMessageToMixpanel("Queuing event for sending later");
                             logAboutMessageToMixpanel("    " + message.toString());
-                            queueDepth = mDbAdapter.addJSON(message, MPDbAdapter.Table.EVENTS);
+                            returnCode = mDbAdapter.addJSON(message, MPDbAdapter.Table.EVENTS);
                         } catch (final JSONException e) {
                             Log.e(LOGTAG, "Exception tracking event " + eventDescription.getEventName(), e);
                         }
@@ -266,14 +263,30 @@ import java.util.Map;
                     else if (msg.what == FLUSH_QUEUE) {
                         logAboutMessageToMixpanel("Flushing queue due to scheduled or forced flush");
                         updateFlushFrequency();
-                        mDecideChecker.runDecideChecks(getPoster());
-                        sendAllData(mDbAdapter);
+                        if (SystemClock.elapsedRealtime() >= mRetryAfter) {
+                            try {
+                                sendAllData(mDbAdapter);
+                                mDecideChecker.runDecideChecks(getPoster());
+                            } catch (RemoteService.ServiceUnavailableException e) {
+                                mRetryAfter = SystemClock.elapsedRealtime() + e.getRetryAfter() * 1000;
+                            }
+                        }
                     }
                     else if (msg.what == INSTALL_DECIDE_CHECK) {
-                        logAboutMessageToMixpanel("Installing a check for surveys and in app notifications");
-                        final DecideUpdates check = (DecideUpdates) msg.obj;
+                        logAboutMessageToMixpanel("Installing a check for surveys and in-app notifications");
+                        final DecideMessages check = (DecideMessages) msg.obj;
                         mDecideChecker.addDecideCheck(check);
-                        mDecideChecker.runDecideChecks(getPoster());
+                        if (SystemClock.elapsedRealtime() >= mRetryAfter) {
+                            try {
+                                mDecideChecker.runDecideChecks(getPoster());
+                            } catch (RemoteService.ServiceUnavailableException e) {
+                                mRetryAfter = SystemClock.elapsedRealtime() + e.getRetryAfter() * 1000;
+                            }
+                        }
+                    }
+                    else if (msg.what == REGISTER_FOR_GCM) {
+                        final String senderId = (String) msg.obj;
+                        runGCMRegistration(senderId);
                     }
                     else if (msg.what == KILL_WORKER) {
                         Log.w(LOGTAG, "Worker received a hard kill. Dumping all events and force-killing. Thread id " + Thread.currentThread().getId());
@@ -288,18 +301,24 @@ import java.util.Map;
 
                     ///////////////////////////
 
-                    if (queueDepth >= mConfig.getBulkUploadLimit()) {
+                    if ((returnCode >= mConfig.getBulkUploadLimit() || returnCode == MPDbAdapter.DB_OUT_OF_MEMORY_ERROR) &&
+                            SystemClock.elapsedRealtime() >= mRetryAfter) {
                         logAboutMessageToMixpanel("Flushing queue due to bulk upload limit");
                         updateFlushFrequency();
-                        sendAllData(mDbAdapter);
-                    } else if (queueDepth > 0 && !hasMessages(FLUSH_QUEUE)) {
+                        try {
+                            sendAllData(mDbAdapter);
+                            mDecideChecker.runDecideChecks(getPoster());
+                        } catch (RemoteService.ServiceUnavailableException e) {
+                            mRetryAfter = SystemClock.elapsedRealtime() + e.getRetryAfter() * 1000;
+                        }
+                    } else if (returnCode > 0 && !hasMessages(FLUSH_QUEUE)) {
                         // The !hasMessages(FLUSH_QUEUE) check is a courtesy for the common case
                         // of delayed flushes already enqueued from inside of this thread.
                         // Callers outside of this thread can still send
                         // a flush right here, so we may end up with two flushes
                         // in our queue, but we're OK with that.
 
-                        logAboutMessageToMixpanel("Queue depth " + queueDepth + " - Adding flush in " + mFlushInterval);
+                        logAboutMessageToMixpanel("Queue depth " + returnCode + " - Adding flush in " + mFlushInterval);
                         if (mFlushInterval >= 0) {
                             sendEmptyMessageDelayed(FLUSH_QUEUE, mFlushInterval);
                         }
@@ -318,9 +337,52 @@ import java.util.Map;
                 }
             }// handleMessage
 
+            private void runGCMRegistration(String senderID) {
+                final String registrationId;
+                try {
+                    // We don't actually require Google Play Services to be available
+                    // (since we can't specify what version customers will be using,
+                    // and because the latest Google Play Services actually have
+                    // dependencies on Java 7)
 
-            private void sendAllData(MPDbAdapter dbAdapter) {
-                final ServerMessage poster = getPoster();
+                    // Consider adding a transitive dependency on the latest
+                    // Google Play Services version and requiring Java 1.7
+                    // in the next major library release.
+                    try {
+                        final int resultCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(mContext);
+                        if (resultCode != ConnectionResult.SUCCESS) {
+                            Log.i(LOGTAG, "Can't register for push notifications, Google Play Services are not installed.");
+                            return;
+                        }
+                    } catch (RuntimeException e) {
+                        Log.i(LOGTAG, "Can't register for push notifications, Google Play services are not configured.");
+                        return;
+                    }
+
+
+                    final GoogleCloudMessaging gcm = GoogleCloudMessaging.getInstance(mContext);
+                    registrationId = gcm.register(senderID);
+                } catch (IOException e) {
+                    Log.i(LOGTAG, "Exception when trying to register for GCM", e);
+                    return;
+                } catch (NoClassDefFoundError e) {
+                    Log.w(LOGTAG, "Google play services were not part of this build, push notifications cannot be registered or delivered");
+                    return;
+                }
+
+                MixpanelAPI.allInstances(new MixpanelAPI.InstanceProcessor() {
+                    @Override
+                    public void process(MixpanelAPI api) {
+                        if (MPConfig.DEBUG) {
+                            Log.v(LOGTAG, "Using existing pushId " + registrationId);
+                        }
+                        api.getPeople().setPushRegistrationId(registrationId);
+                    }
+                });
+            }
+
+            private void sendAllData(MPDbAdapter dbAdapter) throws RemoteService.ServiceUnavailableException {
+                final RemoteService poster = getPoster();
                 if (! poster.isOnline(mContext)) {
                     logAboutMessageToMixpanel("Not flushing data to Mixpanel because the device is not connected to the internet.");
                     return;
@@ -330,7 +392,7 @@ import java.util.Map;
                 if (mDisableFallback) {
                     sendData(dbAdapter, MPDbAdapter.Table.EVENTS, new String[]{ mConfig.getEventsEndpoint() });
                     sendData(dbAdapter, MPDbAdapter.Table.PEOPLE, new String[]{ mConfig.getPeopleEndpoint() });
-                 } else {
+                } else {
                     sendData(dbAdapter, MPDbAdapter.Table.EVENTS,
                              new String[]{ mConfig.getEventsEndpoint(), mConfig.getEventsFallbackEndpoint() });
                     sendData(dbAdapter, MPDbAdapter.Table.PEOPLE,
@@ -338,8 +400,8 @@ import java.util.Map;
                 }
             }
 
-            private void sendData(MPDbAdapter dbAdapter, MPDbAdapter.Table table, String[] urls) {
-                final ServerMessage poster = getPoster();
+            private void sendData(MPDbAdapter dbAdapter, MPDbAdapter.Table table, String[] urls) throws RemoteService.ServiceUnavailableException {
+                final RemoteService poster = getPoster();
                 final String[] eventsData = dbAdapter.generateDataString(table);
 
                 if (eventsData != null) {
@@ -357,12 +419,11 @@ import java.util.Map;
                     byte[] response;
                     for (String url : urls) {
                         try {
-                            response = poster.performRequest(url, params);
+                            final SSLSocketFactory socketFactory = mConfig.getSSLSocketFactory();
+                            response = poster.performRequest(url, params, socketFactory);
                             deleteEvents = true; // Delete events on any successful post, regardless of 1 or 0 response
                             if (null == response) {
-                                if (MPConfig.DEBUG) {
-                                    Log.d(LOGTAG, "Response was null, unexpected failure posting to " + url + ".");
-                                }
+                                logAboutMessageToMixpanel("Response was null, unexpected failure posting to " + url + ".");
                             } else {
                                 String parsedResponse;
                                 try {
@@ -382,8 +443,7 @@ import java.util.Map;
                             Log.e(LOGTAG, "Cannot interpret " + url + " as a URL.", e);
                             break;
                         } catch (final IOException e) {
-                            if (MPConfig.DEBUG)
-                                Log.d(LOGTAG, "Cannot post message to " + url + ".", e);
+                            logAboutMessageToMixpanel("Cannot post message to " + url + ".", e);
                             deleteEvents = false;
                         }
                     }
@@ -414,6 +474,36 @@ import java.util.Map;
                 ret.put("$manufacturer", Build.MANUFACTURER == null ? "UNKNOWN" : Build.MANUFACTURER);
                 ret.put("$brand", Build.BRAND == null ? "UNKNOWN" : Build.BRAND);
                 ret.put("$model", Build.MODEL == null ? "UNKNOWN" : Build.MODEL);
+
+                try {
+                    try {
+                        final int servicesAvailable = GooglePlayServicesUtil.isGooglePlayServicesAvailable(mContext);
+                        switch (servicesAvailable) {
+                            case ConnectionResult.SUCCESS:
+                                ret.put("$google_play_services", "available");
+                                break;
+                            case ConnectionResult.SERVICE_MISSING:
+                                ret.put("$google_play_services", "missing");
+                                break;
+                            case ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED:
+                                ret.put("$google_play_services", "out of date");
+                                break;
+                            case ConnectionResult.SERVICE_DISABLED:
+                                ret.put("$google_play_services", "disabled");
+                                break;
+                            case ConnectionResult.SERVICE_INVALID:
+                                ret.put("$google_play_services", "invalid");
+                                break;
+                        }
+                    } catch (RuntimeException e) {
+                        // Turns out even checking for the service will cause explosions
+                        // unless we've set up meta-data
+                        ret.put("$google_play_services", "not configured");
+                    }
+
+                } catch (NoClassDefFoundError e) {
+                    ret.put("$google_play_services", "not included");
+                }
 
                 final DisplayMetrics displayMetrics = mSystemInformation.getDisplayMetrics();
                 ret.put("$screen_dpi", displayMetrics.densityDpi);
@@ -468,9 +558,10 @@ import java.util.Map;
             }
 
             private MPDbAdapter mDbAdapter;
-            private long mFlushInterval; // XXX remove when associated deprecated APIs are removed
-            private boolean mDisableFallback; // XXX remove when associated deprecated APIs are removed
             private final DecideChecker mDecideChecker;
+            private final long mFlushInterval;
+            private final boolean mDisableFallback;
+            private long mRetryAfter;
         }// AnalyticsMessageHandler
 
         private void updateFlushFrequency() {
@@ -502,20 +593,18 @@ import java.util.Map;
 
     // Used across thread boundaries
     private final Worker mWorker;
-    private final Context mContext;
-    private final MPConfig mConfig;
+    protected final Context mContext;
+    protected final MPConfig mConfig;
 
     // Messages for our thread
-    private static int ENQUEUE_PEOPLE = 0; // submit events and people data
-    private static int ENQUEUE_EVENTS = 1; // push given JSON message to people DB
-    private static int FLUSH_QUEUE = 2; // push given JSON message to events DB
-    private static int KILL_WORKER = 5; // Hard-kill the worker thread, discarding all events on the event queue. This is for testing, or disasters.
-    private static int INSTALL_DECIDE_CHECK = 12; // Run this DecideCheck at intervals until it isDestroyed()
+    private static final int ENQUEUE_PEOPLE = 0; // submit events and people data
+    private static final int ENQUEUE_EVENTS = 1; // push given JSON message to people DB
+    private static final int FLUSH_QUEUE = 2; // push given JSON message to events DB
+    private static final int KILL_WORKER = 5; // Hard-kill the worker thread, discarding all events on the event queue. This is for testing, or disasters.
+    private static final int INSTALL_DECIDE_CHECK = 12; // Run this DecideCheck at intervals until it isDestroyed()
+    private static final int REGISTER_FOR_GCM = 13; // Register for GCM using Google Play Services
 
-    private static int SET_FLUSH_INTERVAL = 4; // XXX REMOVE when associated deprecated APIs are removed
-    private static int SET_DISABLE_FALLBACK = 10; // XXX REMOVE when associated deprecated APIs are removed
-
-    private static final String LOGTAG = "MixpanelAPI";
+    private static final String LOGTAG = "MixpanelAPI.Messages";
 
     private static final Map<Context, AnalyticsMessages> sInstances = new HashMap<Context, AnalyticsMessages>();
 

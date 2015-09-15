@@ -9,12 +9,11 @@ import junit.framework.Assert;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
 
+
+@SuppressWarnings("deprecation")
 class MockMixpanel extends MixpanelAPI {
     public MockMixpanel(Context context, Future<SharedPreferences> prefsFuture, String testToken) {
         super(context, prefsFuture, testToken);
@@ -29,15 +28,6 @@ class MockMixpanel extends MixpanelAPI {
     }
 
     public static class MockPeople implements People {
-        @Override
-        public void checkForSurvey(final SurveyCallbacks callbacks, final Activity parent) {
-            Assert.fail("Unexpected call");
-        }
-
-        @Override
-        public void showSurvey(final Survey s, final Activity parent) {
-            Assert.fail("Unexpected call");
-        }
 
         @Override
         public void identify(final String distinctId) {
@@ -50,6 +40,9 @@ class MockMixpanel extends MixpanelAPI {
         }
 
         @Override
+        public void setMap(Map<String, Object> properties) { Assert.fail("Unexpected call"); }
+
+        @Override
         public void set(final JSONObject properties) {
             Assert.fail("Unexpected call");
         }
@@ -60,12 +53,20 @@ class MockMixpanel extends MixpanelAPI {
         }
 
         @Override
+        public void setOnceMap(Map<String, Object> properties) { Assert.fail("Unexpected call"); }
+
+        @Override
         public void setOnce(final JSONObject properties) {
             Assert.fail("Unexpected call");
         }
 
         @Override
         public void increment(final String name, final double increment) {
+            Assert.fail("Unexpected call");
+        }
+
+        @Override
+        public void merge(String name, JSONObject updates) {
             Assert.fail("Unexpected call");
         }
 
@@ -136,6 +137,11 @@ class MockMixpanel extends MixpanelAPI {
         }
 
         @Override
+        public void joinExperimentIfAvailable() {
+            Assert.fail("Unexpected call");
+        }
+
+        @Override
         public Survey getSurveyIfAvailable() {
             Assert.fail("Unexpected call");
             return null;
@@ -158,9 +164,15 @@ class MockMixpanel extends MixpanelAPI {
         }
 
         @Override
-        public void checkForSurvey(final SurveyCallbacks callbacks) {
+        public void showGivenNotification(InAppNotification notif, final Activity parent) {
             Assert.fail("Unexpected call");
         }
+
+        @Override
+        public void trackNotification(String eventName, InAppNotification notif) {
+            Assert.fail("Unexpected call");
+        }
+
 
         @Override
         public void addOnMixpanelUpdatesReceivedListener(final OnMixpanelUpdatesReceivedListener listener) {
@@ -173,9 +185,29 @@ class MockMixpanel extends MixpanelAPI {
         }
 
         @Override
+        public void trackNotificationSeen(final InAppNotification notif) {
+            Assert.fail("Unexpected call");
+        }
+
+        @Override
         public People withIdentity(final String distinctId) {
             Assert.fail("Unexpected call");
             return null;
+        }
+
+        @Override
+        public void checkForSurvey(final SurveyCallbacks callbacks) {
+            Assert.fail("Unexpected call");
+        }
+
+        @Override
+        public void checkForSurvey(final SurveyCallbacks callbacks, final Activity parent) {
+            Assert.fail("Unexpected call");
+        }
+
+        @Override
+        public void showSurvey(final Survey s, final Activity parent) {
+            Assert.fail("Unexpected call");
         }
     };
 

@@ -3,6 +3,7 @@ package com.mixpanel.android.util;
 import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.util.Log;
 import android.view.View;
 
 public class ActivityImageUtils {
@@ -25,7 +26,11 @@ public class ActivityImageUtils {
                 scaleHeight = original.getHeight() / scaleHeight;
             }
             if (scaleWidth > 0 && scaleHeight > 0) {
-                scaled = Bitmap.createScaledBitmap(original, scaleWidth, scaleHeight, false);
+                try {
+                    scaled = Bitmap.createScaledBitmap(original, scaleWidth, scaleHeight, false);
+                } catch (OutOfMemoryError error) {
+                    Log.i(LOGTAG, "Not enough memory to produce scaled image, returning a null screenshot");
+                }
             }
         }
         if (!originalCacheState) {
@@ -60,4 +65,7 @@ public class ActivityImageUtils {
 
         return Color.HSVToColor(0xf2, hsvBackground);
     }
+
+    @SuppressWarnings("unused")
+    private static final String LOGTAG = "MixpanelAPI.ActImgUtils";
 }

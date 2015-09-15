@@ -1,38 +1,63 @@
 package com.mixpanel.android.mpmetrics;
 
 import android.content.Context;
+import android.os.Bundle;
 import android.test.AndroidTestCase;
 
+import com.mixpanel.android.util.RemoteService;
+import com.mixpanel.android.util.HttpService;
+import com.mixpanel.android.viewcrawler.UpdatesFromMixpanel;
+
+import org.apache.http.NameValuePair;
+import org.json.JSONArray;
+
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.util.ArrayList;
 import java.util.List;
+
+import javax.net.ssl.SSLSocketFactory;
 
 public class DecideCheckerTest extends AndroidTestCase {
 
     @Override
     public void setUp() {
-        mDecideChecker = new DecideChecker(getContext(), MPConfig.getInstance(getContext()));
+        mConfig = new MockConfig(new Bundle());
+        mDecideChecker = new DecideChecker(getContext(), mConfig);
         mPoster = new MockPoster();
-        mDecideUpdates1 = new DecideUpdates("TOKEN 1", "DISTINCT ID 1", null);
-        mDecideUpdates2 = new DecideUpdates("TOKEN 2", "DISTINCT ID 2", null);
-        mDecideUpdates3 = new DecideUpdates("TOKEN 3", "DISTINCT ID 3", null);
+        mEventBinder = new MockUpdatesFromMixpanel();
+        mEventBinder.startUpdates();
+        mDecideMessages1 = new DecideMessages("TOKEN 1", null, mEventBinder);
+        mDecideMessages1.setDistinctId("DISTINCT ID 1");
+        mDecideMessages2 = new DecideMessages("TOKEN 2", null, mEventBinder);
+        mDecideMessages2.setDistinctId("DISTINCT ID 2");
+        mDecideMessages3 = new DecideMessages("TOKEN 3", null, mEventBinder);
+        mDecideMessages3.setDistinctId("DISTINCT ID 3");
     }
 
-    public void testReadEmptyLists() {
-        mDecideChecker.addDecideCheck(mDecideUpdates1);
+    public void testReadEmptyLists() throws RemoteService.ServiceUnavailableException {
+        mDecideChecker.addDecideCheck(mDecideMessages1);
 
         mPoster.response = bytes("{}");
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[] {
+                new JSONArray()
+        });
+        mEventBinder.bindingsSeen.clear();
 
         mPoster.response = bytes("{\"surveys\":[], \"notifications\":[]}");
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[] {
+                new JSONArray()
+        });
     }
 
-    public void testReadSurvey1() {
-        mDecideChecker.addDecideCheck(mDecideUpdates1);
+    public void testReadSurvey1() throws RemoteService.ServiceUnavailableException {
+        mDecideChecker.addDecideCheck(mDecideMessages1);
 
         mPoster.response = bytes(
             "{\"surveys\":[ {" +
@@ -45,9 +70,12 @@ public class DecideCheckerTest extends AndroidTestCase {
         );
 
         mDecideChecker.runDecideChecks(mPoster);
-        final Survey found = mDecideUpdates1.getSurvey(false);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        final Survey found = mDecideMessages1.getSurvey(false);
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[]{
+                new JSONArray()
+        });
 
         assertEquals(found.getId(), 291);
         assertEquals(found.getCollectionId(), 141);
@@ -72,16 +100,19 @@ public class DecideCheckerTest extends AndroidTestCase {
         assertEquals(textChoices.size(), 0);
     }
 
-    public void testReadSurvey2() {
-        mDecideChecker.addDecideCheck(mDecideUpdates1);
+    public void testReadSurvey2() throws RemoteService.ServiceUnavailableException {
+        mDecideChecker.addDecideCheck(mDecideMessages1);
         mPoster.response = bytes(
                 "{\"surveys\":[{\"collections\":[{\"id\":151,\"selector\":\"\\\"@mixpanel\\\" in properties[\\\"$email\\\"]\"}],\"id\":299,\"questions\":[{\"prompt\":\"PROMPT1\",\"extra_data\":{\"$choices\":[\"Answer1,1\",\"Answer1,2\",\"Answer1,3\"]},\"type\":\"multiple_choice\",\"id\":287},{\"prompt\":\"How has the demo affected you?\",\"extra_data\":{\"$choices\":[\"I laughed, I cried, it was better than \\\"Cats\\\"\",\"I want to see it again, and again, and again.\"]},\"type\":\"multiple_choice\",\"id\":289}]}]}"
         );
 
         mDecideChecker.runDecideChecks(mPoster);
-        final Survey found = mDecideUpdates1.getSurvey(false);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        final Survey found = mDecideMessages1.getSurvey(false);
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[]{
+                new JSONArray()
+        });
 
         assertEquals(found.getId(), 299);
         assertEquals(found.getCollectionId(), 151);
@@ -100,70 +131,111 @@ public class DecideCheckerTest extends AndroidTestCase {
         assertEquals(mcChoices.get(2), "Answer1,3");
     }
 
-    public void testBadDecideResponses() {
-        mDecideChecker.addDecideCheck(mDecideUpdates1);
+    public void testBadDecideResponses() throws RemoteService.ServiceUnavailableException {
+        mDecideChecker.addDecideCheck(mDecideMessages1);
 
         // Corrupted or crazy responses.
         mPoster.response = bytes("{ WONT PARSE");
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[] {}); // No updates at all on parsing failure
+        mEventBinder.bindingsSeen.clear();
 
         // Valid JSON but bad (no name)
         mPoster.response = bytes(
-                "{\"surveys\":{\"id\":3,\"collections\":[{\"id\": 9}],\"questions\":[{\"id\":12,\"type\":\"text\",\"prompt\":\"P\",\"extra_data\":{}}]}"
+            "{\"surveys\":{\"id\":3,\"collections\":[{\"id\": 9}],\"questions\":[{\"id\":12,\"type\":\"text\",\"prompt\":\"P\",\"extra_data\":{}}]}}"
         );
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[]{
+                new JSONArray()
+        });
+        mEventBinder.bindingsSeen.clear();
 
-        // Just pure craziness
+        // Just pure (but legal) JSON craziness
         mPoster.response = bytes("null");
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[]{});
+        mEventBinder.bindingsSeen.clear();
 
         // Valid JSON that isn't relevant
         mPoster.response = bytes("{\"Ziggy Startdust and the Spiders from Mars\":\"The Best Ever Number One\"}");
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[]{
+                new JSONArray()
+        });
+        mEventBinder.bindingsSeen.clear();
 
         // Valid survey with no questions
         mPoster.response = bytes(
-                "{\"surveys\":[{\"collections\":[{\"id\":151,\"selector\":\"\\\"@mixpanel\\\" in properties[\\\"$email\\\"]\"}],\"id\":299,\"questions\":[]}]}"
+            "{\"surveys\":[{\"collections\":[{\"id\":151,\"selector\":\"\\\"@mixpanel\\\" in properties[\\\"$email\\\"]\"}],\"id\":299,\"questions\":[]}]}"
         );
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[]{
+            new JSONArray()
+        });
+        mEventBinder.bindingsSeen.clear();
 
         // Valid survey with a question with no choices
         mPoster.response = bytes(
-                "{\"surveys\":[ {" +
-                        "   \"id\":291," +
-                        "   \"questions\":[" +
-                        "       {\"id\":275,\"type\":\"multiple_choice\",\"extra_data\":{\"$choices\":[]},\"prompt\":\"Multiple Choice Prompt\"}," +
-                        "   \"collections\":[{\"selector\":\"\\\"@mixpanel\\\" in properties[\\\"$email\\\"]\",\"id\":141}]}" +
-                        "]}"
+            "{\"surveys\":[{\"id\":291,\"collections\":[{\"selector\":\"\\\"@mixpanel\\\" in properties[\\\"$email\\\"]\",\"id\":141}],\"questions\":[{\"id\":275,\"type\":\"multiple_choice\",\"extra_data\":{\"$choices\":[]},\"prompt\":\"Multiple Choice Prompt\"}]}]}"
         );
         mDecideChecker.runDecideChecks(mPoster);
-        assertNull(mDecideUpdates1.getSurvey(false));
-        assertNull(mDecideUpdates1.getNotification(false));
+        assertNull(mDecideMessages1.getSurvey(false));
+        assertNull(mDecideMessages1.getNotification(false));
+        assertUpdatesSeen(new JSONArray[]{
+            new JSONArray()
+        });
+        mEventBinder.bindingsSeen.clear();
     }
 
-    public void testDecideResponses() {
+    public void testDecideHonorsFallbackEnabled() throws RemoteService.ServiceUnavailableException {
+        mConfig.fallbackDisabled = false;
+        mPoster.requestedUrls.clear();
+        mPoster.response = null;
+        mPoster.exception = new IOException("Bang!");
+        mDecideChecker.addDecideCheck(mDecideMessages1);
+        mDecideChecker.runDecideChecks(mPoster);
+        assertEquals(2, mPoster.requestedUrls.size());
+    }
+
+    public void testDecideHonorsFallbackDisabled() throws RemoteService.ServiceUnavailableException {
+        mConfig.fallbackDisabled = true;
+        mPoster.requestedUrls.clear();
+        mPoster.response =  null;
+        mPoster.exception = new IOException("Bang!");
+        mDecideChecker.addDecideCheck(mDecideMessages1);
+        mDecideChecker.runDecideChecks(mPoster);
+        assertEquals(1, mPoster.requestedUrls.size());
+    }
+
+    public void testDecideResponses() throws DecideChecker.UnintelligibleMessageException {
         {
             final String nonsense = "I AM NONSENSE";
-            final DecideChecker.Result parseNonsense = DecideChecker.parseDecideResponse(nonsense);
-            assertTrue(parseNonsense.notifications.isEmpty());
-            assertTrue(parseNonsense.surveys.isEmpty());
+            try {
+                final DecideChecker.Result parseNonsense = DecideChecker.parseDecideResponse(nonsense);
+                fail("Should have thrown exception on parse");
+            } catch (DecideChecker.UnintelligibleMessageException e) {
+                ; // OK
+            }
         }
 
         {
             final String allNull = "null";
-            final DecideChecker.Result parseAllNull = DecideChecker.parseDecideResponse(allNull);
-            assertTrue(parseAllNull.notifications.isEmpty());
-            assertTrue(parseAllNull.surveys.isEmpty());
+            try {
+                final DecideChecker.Result parseAllNull = DecideChecker.parseDecideResponse(allNull);
+                fail("Should have thrown exception on decide response that isn't surrounded by {}");
+            } catch (DecideChecker.UnintelligibleMessageException e) {
+                ; // OK
+            }
         }
 
         {
@@ -246,6 +318,15 @@ public class DecideCheckerTest extends AndroidTestCase {
         }
     }
 
+    private void assertUpdatesSeen(JSONArray[] expected) {
+        assertEquals(expected.length, mEventBinder.bindingsSeen.size());
+        for (int bindingCallIx = 0; bindingCallIx < expected.length; bindingCallIx++) {
+            final JSONArray expectedArray = expected[bindingCallIx];
+            final JSONArray seen = mEventBinder.bindingsSeen.get(bindingCallIx);
+            assertEquals(expectedArray.toString(), seen.toString());
+        }
+    }
+
     private byte[] bytes(String s) {
         try {
             return s.getBytes("UTF-8");
@@ -254,16 +335,70 @@ public class DecideCheckerTest extends AndroidTestCase {
         }
     }
 
-    private class MockPoster extends ServerMessage {
+    private static class MockPoster extends HttpService {
         @Override
-        public byte[] getUrls(Context context, String[] urls) {
+        public byte[] performRequest(String url, List<NameValuePair> pairs, SSLSocketFactory socketFactory) throws IOException {
+            assertNull(pairs);
+            requestedUrls.add(url);
+
+            if (null != exception) {
+                throw exception;
+            }
             return response;
         }
 
+        public List<String> requestedUrls = new ArrayList<String>();
         public byte[] response = null;
+        public IOException exception = null;
+    }
+
+    private static class MockUpdatesFromMixpanel implements UpdatesFromMixpanel {
+
+        @Override
+        public void startUpdates() {
+            mStarted = true;
+        }
+
+        @Override
+        public void setEventBindings(JSONArray bindings) {
+            assertTrue(mStarted);
+            bindingsSeen.add(bindings);
+        }
+
+        @Override
+        public void setVariants(JSONArray variants) {
+            assertTrue(mStarted);
+            variantsSeen.add(variants);
+        }
+
+        @Override
+        public Tweaks getTweaks() {
+            assertTrue(mStarted);
+            return null;
+        }
+
+        public List<JSONArray> bindingsSeen = new ArrayList<JSONArray>();
+        public List<JSONArray> variantsSeen = new ArrayList<JSONArray>();
+
+        private volatile boolean mStarted = false;
+    }
+
+    private static class MockConfig extends MPConfig {
+        MockConfig(Bundle metaData) {
+            super(metaData, null);
+        }
+
+        @Override
+        public boolean getDisableFallback() {
+            return fallbackDisabled;
+        }
+
+        public boolean fallbackDisabled = false;
     }
 
     private DecideChecker mDecideChecker;
     private MockPoster mPoster;
-    private DecideUpdates mDecideUpdates1, mDecideUpdates2, mDecideUpdates3;
+    private MockConfig mConfig;
+    private MockUpdatesFromMixpanel mEventBinder;
+    private DecideMessages mDecideMessages1, mDecideMessages2, mDecideMessages3;
 }

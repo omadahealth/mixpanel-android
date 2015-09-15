@@ -22,7 +22,7 @@ import android.util.Log;
  *
  */
 /* package */ class MPDbAdapter {
-    private static final String LOGTAG = "MixpanelAPI";
+    private static final String LOGTAG = "MixpanelAPI.Database";
 
     public enum Table {
         EVENTS ("events"),
@@ -39,11 +39,15 @@ import android.util.Log;
         private final String mTableName;
     }
 
-    private static final String DATABASE_NAME = "mixpanel";
-    private static final int DATABASE_VERSION = 4;
-
     public static final String KEY_DATA = "data";
     public static final String KEY_CREATED_AT = "created_at";
+
+    public static final int DB_UPDATE_ERROR = -1;
+    public static final int DB_OUT_OF_MEMORY_ERROR = -2;
+    public static final int DB_UNDEFINED_CODE = -3;
+
+    private static final String DATABASE_NAME = "mixpanel";
+    private static final int DATABASE_VERSION = 4;
 
     private static final String CREATE_EVENTS_TABLE =
        "CREATE TABLE " + Table.EVENTS.getName() + " (_id INTEGER PRIMARY KEY AUTOINCREMENT, " +
@@ -66,6 +70,7 @@ import android.util.Log;
         MPDatabaseHelper(Context context, String dbName) {
             super(context, dbName, null, DATABASE_VERSION);
             mDatabaseFile = context.getDatabasePath(dbName);
+            mConfig = MPConfig.getInstance(context);
         }
 
         /**
@@ -78,7 +83,9 @@ import android.util.Log;
 
         @Override
         public void onCreate(SQLiteDatabase db) {
-            if (MPConfig.DEBUG) Log.d(LOGTAG, "Creating a new Mixpanel events DB");
+            if (MPConfig.DEBUG) {
+                Log.v(LOGTAG, "Creating a new Mixpanel events DB");
+            }
 
             db.execSQL(CREATE_EVENTS_TABLE);
             db.execSQL(CREATE_PEOPLE_TABLE);
@@ -88,7 +95,9 @@ import android.util.Log;
 
         @Override
         public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-            if (MPConfig.DEBUG) Log.d(LOGTAG, "Upgrading app, replacing Mixpanel events DB");
+            if (MPConfig.DEBUG) {
+                Log.v(LOGTAG, "Upgrading app, replacing Mixpanel events DB");
+            }
 
             db.execSQL("DROP TABLE IF EXISTS " + Table.EVENTS.getName());
             db.execSQL("DROP TABLE IF EXISTS " + Table.PEOPLE.getName());
@@ -98,7 +107,15 @@ import android.util.Log;
             db.execSQL(PEOPLE_TIME_INDEX);
         }
 
+        public boolean belowMemThreshold() {
+            if (mDatabaseFile.exists()) {
+                return Math.max(mDatabaseFile.getUsableSpace(), mConfig.getMinimumDatabaseLimit()) >= mDatabaseFile.length();
+            }
+            return true;
+        }
+
         private final File mDatabaseFile;
+        private final MPConfig mConfig;
     }
 
     public MPDbAdapter(Context context) {
@@ -114,13 +131,20 @@ import android.util.Log;
      * to the SQLiteDatabase.
      * @param j the JSON to record
      * @param table the table to insert into, either "events" or "people"
-     * @return the number of rows in the table, or -1 on failure
+     * @return the number of rows in the table, or DB_OUT_OF_MEMORY_ERROR/DB_UPDATE_ERROR
+     * on failure
      */
     public int addJSON(JSONObject j, Table table) {
+        // we are aware of the race condition here, but what can we do..?
+        if (!this.belowMemThreshold()) {
+            Log.e(LOGTAG, "There is not enough space left on the device to store Mixpanel data, so data was discarded");
+            return DB_OUT_OF_MEMORY_ERROR;
+        }
+
         final String tableName = table.getName();
 
         Cursor c = null;
-        int count = -1;
+        int count = DB_UPDATE_ERROR;
 
         try {
             final SQLiteDatabase db = mDb.getWritableDatabase();
@@ -134,7 +158,7 @@ import android.util.Log;
             c.moveToFirst();
             count = c.getInt(0);
         } catch (final SQLiteException e) {
-            Log.e(LOGTAG, "addJSON " + tableName + " FAILED. Deleting DB.", e);
+            Log.e(LOGTAG, "Could not add Mixpanel data to table " + tableName + ". Re-initializing database.", e);
 
             // We assume that in general, the results of a SQL exception are
             // unrecoverable, and could be associated with an oversized or
@@ -166,7 +190,7 @@ import android.util.Log;
             final SQLiteDatabase db = mDb.getWritableDatabase();
             db.delete(tableName, "_id <= " + last_id, null);
         } catch (final SQLiteException e) {
-            Log.e(LOGTAG, "cleanupEvents " + tableName + " by id FAILED. Deleting DB.", e);
+            Log.e(LOGTAG, "Could not clean sent Mixpanel records from " + tableName + ". Re-initializing database.", e);
 
             // We assume that in general, the results of a SQL exception are
             // unrecoverable, and could be associated with an oversized or
@@ -190,7 +214,7 @@ import android.util.Log;
             final SQLiteDatabase db = mDb.getWritableDatabase();
             db.delete(tableName, KEY_CREATED_AT + " <= " + time, null);
         } catch (final SQLiteException e) {
-            Log.e(LOGTAG, "cleanupEvents " + tableName + " by time FAILED. Deleting DB.", e);
+            Log.e(LOGTAG, "Could not clean timed-out Mixpanel records from " + tableName + ". Re-initializing database.", e);
 
             // We assume that in general, the results of a SQL exception are
             // unrecoverable, and could be associated with an oversized or
@@ -243,7 +267,7 @@ import android.util.Log;
                 data = arr.toString();
             }
         } catch (final SQLiteException e) {
-            Log.e(LOGTAG, "generateDataString " + tableName, e);
+            Log.e(LOGTAG, "Could not pull records for Mixpanel out of database " + tableName + ". Waiting to send.", e);
 
             // We'll dump the DB on write failures, but with reads we can
             // let things ride in hopes the issue clears up.
@@ -263,5 +287,10 @@ import android.util.Log;
             return ret;
         }
         return null;
+    }
+
+    /* For testing use only, do not call from in production code */
+    protected boolean belowMemThreshold() {
+        return mDb.belowMemThreshold();
     }
 }

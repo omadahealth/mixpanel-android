@@ -7,27 +7,35 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:0.12.2'
+        classpath 'com.android.tools.build:gradle:1.1.0'
     }
 }
 
 android {
-    compileSdkVersion 19
-    buildToolsVersion "20.0.0"
+    compileSdkVersion 21
+    buildToolsVersion "22.0.1"
 
     defaultConfig {
         // If you change minSdkVersion or targetSdkVersion below, you must also change
         // the relevant attributes of the <uses-sdk> tag in AndroidManifest.xml
-        minSdkVersion 8
-        targetSdkVersion 20
-        testPackageName "com.mixpanel.android.mpmetrics"
+        minSdkVersion 9
+        targetSdkVersion 21
+        testApplicationId "com.mixpanel.android.mpmetrics"
         testInstrumentationRunner "android.test.InstrumentationTestRunner"
 
         lintOptions {
             abortOnError true
             warningsAsErrors true
+            disable "UnusedResources"
         }
     }
+}
+
+// Note- *all* dependencies are marked as optional in our final
+// pom! If you need a transitive dependency in the library, you'll
+// have to change the bit in uploadArchives that marks all dependencies as optional.
+dependencies {
+    compile "com.google.android.gms:play-services:[3.1,)"
 }
 
 android.libraryVariants.all { variant ->
@@ -36,7 +44,28 @@ android.libraryVariants.all { variant ->
         source = variant.javaCompile.source
         ext.androidJar = "${android.sdkDirectory}/platforms/${android.compileSdkVersion}/android.jar"
         classpath = files(variant.javaCompile.classpath.files) + files(ext.androidJar)
-        exclude '**/R.*', '**/BuildConfig.java'
+        exclude(
+            '**/R.*',
+            '**/java_websocket/**',
+            '**/util/**',
+            '**/AlwaysSubmittableEditText.java',
+            '**/BuildConfig.java',
+            '**/CardCarouselLayout.java',
+            '**/FadeOnPressButton.java',
+            '**/FadingImageView.java',
+            '**/InAppFragment.java',
+            '**/MiniCircleImageView.java',
+            '**/ResourceIds.java',
+            '**/ResourceReader.java',
+            '**/SurveyActivity.java',
+            '**/SurveyChoiceView.java',
+            '**/SurveyCallbacks.java',
+            '**/TrackingDebug.java',
+            '**/Tweaks.java',
+            '**/UpdateDisplayState.java',
+            '**/UpdatesFromMixpanel.java',
+            '**/ViewCrawler.java'
+        )
         options {
             encoding = 'UTF-8'
             docEncoding = 'UTF-8'
@@ -45,15 +74,26 @@ android.libraryVariants.all { variant ->
     }
 }
 
-def isReleaseVersion() {
-    return !version.endsWith("SNAPSHOT");
+android.buildTypes.all { buildType ->
+    buildType.buildConfigField "String", "MIXPANEL_VERSION", "\"${project.properties.version}\""
 }
 
+allprojects {
+    gradle.projectsEvaluated {
+        tasks.withType(JavaCompile) {
+            options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
+        }
+    }
+}
 //configurations {
 //    archives {
 //        extendsFrom configurations.default
 //    }
 //}
+
+def isReleaseVersion() {
+    return !version.endsWith("SNAPSHOT");
+}
 
 if (isReleaseVersion()) {
     signing {

@@ -22,8 +22,7 @@ import android.util.Log;
 @SuppressLint("CommitPrefEdits")
 /* package */ class PersistentIdentity {
 
-    // Will be called from crazy threads, BUT will be the only thread that has access to the given
-    // SharedPreferences during the run.
+    // Should ONLY be called from an OnPrefsLoadedListener (since it should NEVER be called concurrently)
     public static JSONArray waitingPeopleRecordsForSending(SharedPreferences storedPreferences) {
         JSONArray ret = null;
         final String peopleDistinctId = storedPreferences.getString("people_distinct_id", null);
@@ -60,7 +59,7 @@ import android.util.Log;
             final SharedPreferences referralInfo = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE);
             final SharedPreferences.Editor editor = referralInfo.edit();
             editor.clear();
-            for (final Map.Entry<String, String> entry:properties.entrySet()) {
+            for (final Map.Entry<String, String> entry : properties.entrySet()) {
                 editor.putString(entry.getKey(), entry.getValue());
             }
             writeEdits(editor);
@@ -85,11 +84,44 @@ import android.util.Log;
         };
     }
 
-    public synchronized JSONObject getSuperProperties() {
-        if (null == mSuperPropertiesCache) {
-            readSuperProperties();
+    public synchronized void addSuperPropertiesToObject(JSONObject ob) {
+        final JSONObject superProperties = this.getSuperPropertiesCache();
+        final Iterator<?> superIter = superProperties.keys();
+        while (superIter.hasNext()) {
+            final String key = (String) superIter.next();
+
+            try {
+                ob.put(key, superProperties.get(key));
+            } catch (JSONException e) {
+                Log.wtf(LOGTAG, "Object read from one JSON Object cannot be written to another", e);
+            }
         }
-        return mSuperPropertiesCache;
+    }
+
+    public synchronized void updateSuperProperties(SuperPropertyUpdate updates) {
+        final JSONObject oldPropCache = getSuperPropertiesCache();
+        final JSONObject copy = new JSONObject();
+
+        try {
+            final Iterator<String> keys = oldPropCache.keys();
+            while (keys.hasNext()) {
+                final String k = keys.next();
+                final Object v = oldPropCache.get(k);
+                copy.put(k, v);
+            }
+        } catch (JSONException e) {
+            Log.wtf(LOGTAG, "Can't copy from one JSONObject to another", e);
+            return;
+        }
+
+        final JSONObject replacementCache = updates.update(copy);
+        if (null == replacementCache) {
+            Log.w(LOGTAG, "An update to Mixpanel's super properties returned null, and will have no effect.");
+            return;
+        }
+
+        mSuperPropertiesCache = replacementCache;
+        storeSuperProperties();
     }
 
     public Map<String, String> getReferrerProperties() {
@@ -177,7 +209,7 @@ import android.util.Log;
     }
 
     public synchronized void registerSuperProperties(JSONObject superProperties) {
-        final JSONObject propCache = getSuperProperties();
+        final JSONObject propCache = getSuperPropertiesCache();
 
         for (final Iterator<?> iter = superProperties.keys(); iter.hasNext(); ) {
             final String key = (String) iter.next();
@@ -231,14 +263,14 @@ import android.util.Log;
     }
 
     public synchronized void unregisterSuperProperty(String superPropertyName) {
-        final JSONObject propCache = getSuperProperties();
+        final JSONObject propCache = getSuperPropertiesCache();
         propCache.remove(superPropertyName);
 
         storeSuperProperties();
     }
 
     public synchronized void registerSuperPropertiesOnce(JSONObject superProperties) {
-        final JSONObject propCache = getSuperProperties();
+        final JSONObject propCache = getSuperPropertiesCache();
 
         for (final Iterator<?> iter = superProperties.keys(); iter.hasNext(); ) {
             final String key = (String) iter.next();
@@ -261,12 +293,22 @@ import android.util.Log;
 
     //////////////////////////////////////////////////
 
+    // Must be called from a synchronized setting
+    private JSONObject getSuperPropertiesCache() {
+        if (null == mSuperPropertiesCache) {
+            readSuperProperties();
+        }
+        return mSuperPropertiesCache;
+    }
+
     // All access should be synchronized on this
     private void readSuperProperties() {
         try {
             final SharedPreferences prefs = mLoadStoredPreferences.get();
             final String props = prefs.getString("super_properties", "{}");
-            if (MPConfig.DEBUG) Log.d(LOGTAG, "Loading Super Properties " + props);
+            if (MPConfig.DEBUG) {
+                Log.v(LOGTAG, "Loading Super Properties " + props);
+            }
             mSuperPropertiesCache = new JSONObject(props);
         } catch (final ExecutionException e) {
             Log.e(LOGTAG, "Cannot load superProperties from SharedPreferences.", e.getCause());
@@ -292,7 +334,7 @@ import android.util.Log;
             referrerPrefs.registerOnSharedPreferenceChangeListener(mReferrerChangeListener);
 
             final Map<String, ?> prefsMap = referrerPrefs.getAll();
-            for (final Map.Entry<String, ?> entry:prefsMap.entrySet()) {
+            for (final Map.Entry<String, ?> entry : prefsMap.entrySet()) {
                 final String prefsName = entry.getKey();
                 final Object prefsVal = entry.getValue();
                 mReferrerPropertiesCache.put(prefsName, prefsVal.toString());
@@ -312,7 +354,9 @@ import android.util.Log;
         }
 
         final String props = mSuperPropertiesCache.toString();
-        if (MPConfig.DEBUG) Log.d(LOGTAG, "Storing Super Properties " + props);
+        if (MPConfig.DEBUG) {
+            Log.v(LOGTAG, "Storing Super Properties " + props);
+        }
 
         try {
             final SharedPreferences prefs = mLoadStoredPreferences.get();
@@ -405,5 +449,5 @@ import android.util.Log;
 
     private static boolean sReferrerPrefsDirty = true;
     private static final Object sReferrerPrefsLock = new Object();
-    private static final String LOGTAG = "MixpanelAPI PersistentIdentity";
+    private static final String LOGTAG = "MixpanelAPI.PIdentity";
 }

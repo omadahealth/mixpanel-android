@@ -57,7 +57,7 @@ import java.util.TimeZone;
  * {@link com.mixpanel.android.mpmetrics.MixpanelAPI.People#showSurveyIfAvailable(Activity)} and
  * {@link com.mixpanel.android.mpmetrics.MixpanelAPI.People#showNotificationIfAvailable(Activity)}
  */
-@TargetApi(14)
+@TargetApi(MPConfig.UI_FEATURES_MIN_API)
 @SuppressLint("ClickableViewAccessibility")
 public class SurveyActivity extends Activity {
     @Override
@@ -97,17 +97,17 @@ public class SurveyActivity extends Activity {
         final InAppNotification inApp = notificationState.getInAppNotification();
 
         // Layout
-        Display display = getWindowManager().getDefaultDisplay();
-        Point size = new Point();
+        final Display display = getWindowManager().getDefaultDisplay();
+        final Point size = new Point();
         display.getSize(size);
 
         if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
-            RelativeLayout.LayoutParams params = (RelativeLayout.LayoutParams) closeButtonWrapper.getLayoutParams();
+            final RelativeLayout.LayoutParams params = (RelativeLayout.LayoutParams) closeButtonWrapper.getLayoutParams();
             params.setMargins(0, 0, 0, (int) (size.y * 0.06f)); // make bottom margin 6% of screen height
             closeButtonWrapper.setLayoutParams(params);
         }
 
-        GradientDrawable gd = new GradientDrawable(
+        final GradientDrawable gd = new GradientDrawable(
             GradientDrawable.Orientation.LEFT_RIGHT, // Ignored in radial gradients
             new int[]{ 0xE560607C, 0xE548485D, 0xE518181F, 0xE518181F }
         );
@@ -155,15 +155,16 @@ public class SurveyActivity extends Activity {
                     Uri uri;
                     try {
                         uri = Uri.parse(uriString);
-                    } catch (IllegalArgumentException e) {
+                    } catch (final IllegalArgumentException e) {
                         Log.i(LOGTAG, "Can't parse notification URI, will not take any action", e);
                         return;
                     }
 
                     try {
-                        Intent viewIntent = new Intent(Intent.ACTION_VIEW, uri);
+                        final Intent viewIntent = new Intent(Intent.ACTION_VIEW, uri);
                         SurveyActivity.this.startActivity(viewIntent);
-                    } catch (ActivityNotFoundException e) {
+                        mMixpanel.getPeople().trackNotification("$campaign_open", inApp);
+                    } catch (final ActivityNotFoundException e) {
                         Log.i(LOGTAG, "User doesn't have an activity for notification URI");
                     }
                 }
@@ -172,7 +173,8 @@ public class SurveyActivity extends Activity {
             }
         });
         ctaButton.setOnTouchListener(new View.OnTouchListener() {
-            public boolean onTouch(View v, MotionEvent event) {
+            @Override
+			public boolean onTouch(View v, MotionEvent event) {
                 if (event.getAction() == MotionEvent.ACTION_DOWN) {
                     v.setBackgroundResource(R.drawable.com_mixpanel_android_cta_button_highlight);
                 } else {
@@ -207,7 +209,7 @@ public class SurveyActivity extends Activity {
         subtextView.startAnimation(translate);
         ctaButton.startAnimation(translate);
 
-        Animation fadeIn = AnimationUtils.loadAnimation(this, R.anim.com_mixpanel_android_fade_in);
+        final Animation fadeIn = AnimationUtils.loadAnimation(this, R.anim.com_mixpanel_android_fade_in);
         closeButtonWrapper.startAnimation(fadeIn);
     }
 
@@ -267,9 +269,9 @@ public class SurveyActivity extends Activity {
         }
 
         final AlertDialog.Builder alertBuilder = new AlertDialog.Builder(this);
-        alertBuilder.setTitle("We'd love your feedback!");
-        alertBuilder.setMessage("Mind taking a quick survey?");
-        alertBuilder.setPositiveButton("Sure", new DialogInterface.OnClickListener() {
+        alertBuilder.setTitle(R.string.com_mixpanel_android_survey_prompt_dialog_title);
+        alertBuilder.setMessage(R.string.com_mixpanel_android_survey_prompt_dialog_message);
+        alertBuilder.setPositiveButton(R.string.com_mixpanel_android_sure, new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int which) {
                 SurveyActivity.this.findViewById(R.id.com_mixpanel_android_activity_survey_id).setVisibility(View.VISIBLE);
@@ -277,7 +279,7 @@ public class SurveyActivity extends Activity {
                 showQuestion(mCurrentQuestion);
             }
         });
-        alertBuilder.setNegativeButton("No, Thanks", new DialogInterface.OnClickListener() {
+        alertBuilder.setNegativeButton(R.string.com_mixpanel_android_no_thanks, new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int which) {
                 SurveyActivity.this.finish();
@@ -319,7 +321,7 @@ public class SurveyActivity extends Activity {
                 people.append("$responses", survey.getCollectionId());
 
                 final UpdateDisplayState.AnswerMap answers = surveyState.getAnswers();
-                for (final Survey.Question question:questionList) {
+                for (final Survey.Question question : questionList) {
                     final String answerString = answers.get(question.getId());
                     if (null != answerString) {
                         try {
@@ -391,18 +393,22 @@ public class SurveyActivity extends Activity {
         return (UpdateDisplayState.DisplayState.SurveyState) mUpdateDisplayState.getDisplayState();
     }
 
-    private UpdateDisplayState.DisplayState.InAppNotificationState getInAppState() {
-        return (UpdateDisplayState.DisplayState.InAppNotificationState) mUpdateDisplayState.getDisplayState();
-    }
-
     private boolean isShowingSurvey() {
-        final UpdateDisplayState.DisplayState displayState = mUpdateDisplayState.getDisplayState();
-        return displayState != null && displayState.getType() == UpdateDisplayState.DisplayState.SurveyState.TYPE;
+        if (null == mUpdateDisplayState) {
+            return false;
+        }
+        return UpdateDisplayState.DisplayState.SurveyState.TYPE.equals(
+            mUpdateDisplayState.getDisplayState().getType()
+        );
     }
 
     private boolean isShowingInApp() {
-        final UpdateDisplayState.DisplayState displayState = mUpdateDisplayState.getDisplayState();
-        return displayState != null && displayState.getType() == UpdateDisplayState.DisplayState.InAppNotificationState.TYPE;
+        if (null == mUpdateDisplayState) {
+            return false;
+        }
+        return UpdateDisplayState.DisplayState.InAppNotificationState.TYPE.equals(
+            mUpdateDisplayState.getDisplayState().getType()
+        );
     }
 
     private void trackSurveyAttempted() {
@@ -522,7 +528,7 @@ public class SurveyActivity extends Activity {
     private static final int SHADOW_SIZE_THRESHOLD_PX = 100;
 
     @SuppressWarnings("unused")
-    private static final String LOGTAG = "MixpanelAPI SurveyActivity";
+    private static final String LOGTAG = "MixpanelAPI.SrvyActvty";
 
     public static final String INTENT_ID_KEY = "com.mixpanel.android.surveys.SurveyActivity.INTENT_ID_KEY";
 }
